@@ -115,7 +115,7 @@ func main() {
 
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(MQTT_BROKER)
-	opts.SetClientID(MQTT_CLIENT_ID)
+	opts.SetClientID(MQTT_CLIENT_ID + fmt.Sprintf("_%d", time.Now().UnixNano()%10000))
 	opts.SetDefaultPublishHandler(messagePubHandler)
 	opts.SetOnConnectHandler(func(client mqtt.Client) {
 		log.Println("✅ Connected to MQTT Broker!")
@@ -520,6 +520,6 @@ func loadEnv() {
 	INFLUX_TOKEN = env("INFLUX_TOKEN", "")
 	INFLUX_ORG = env("INFLUX_ORG", "")
 	INFLUX_BUCKET = env("INFLUX_BUCKET", "brake-sensor")
-	HTTP_PORT = env("HTTP_PORT", ":8080")
+	HTTP_PORT = ":" + env("HTTP_PORT", "8080")
 	TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", "")
 }
