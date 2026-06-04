@@ -4,6 +4,9 @@ let customEnd = '';
 let chart = null;
 let currentStatusFilter = '';
 let allLogs = [];
+let gpsMap = null;
+let gpsTrail = null;
+let gpsMarkers = [];
 
 // --- Gauge ---
 function updateGauge(current) {
@@ -147,8 +150,14 @@ function filterStatus(status) {
 function switchTab(tab) {
     document.getElementById('panel-gauge').classList.toggle('hidden', tab !== 'gauge');
     document.getElementById('panel-chart').classList.toggle('hidden', tab !== 'chart');
-    document.getElementById('tab-gauge').className = `rounded-lg px-5 py-2 text-sm font-medium ${tab === 'gauge' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`;
-    document.getElementById('tab-chart').className = `rounded-lg px-5 py-2 text-sm font-medium ${tab === 'chart' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`;
+    document.getElementById('panel-map').classList.toggle('hidden', tab !== 'map');
+    ['gauge', 'chart', 'map'].forEach(t => {
+        document.getElementById('tab-' + t).className = `rounded-lg px-5 py-2 text-sm font-medium ${tab === t ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`;
+    });
+    if (tab === 'map') {
+        if (!gpsMap) initMap();
+        else gpsMap.invalidateSize();
+    }
 }
 
 // --- Range buttons ---
@@ -182,6 +191,39 @@ function applyDateRange() {
     fetchData();
 }
 
+// --- Map ---
+const statusColor = { AMAN: '#22c55e', PERINGATAN: '#eab308', BAHAYA: '#ef4444' };
+
+function initMap() {
+    gpsMap = L.map('map').setView([-6.2, 106.8], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(gpsMap);
+    gpsTrail = L.polyline([], { color: '#3b82f6', weight: 3 }).addTo(gpsMap);
+    fetchGpsData();
+}
+
+async function fetchGpsData() {
+    try {
+        const res = await fetch('/api/gps');
+        const points = await res.json();
+        if (!points.length) return;
+        points.forEach(p => addGpsPoint(p, false));
+        gpsMap.fitBounds(gpsTrail.getBounds(), { padding: [30, 30] });
+    } catch (e) { console.error('GPS fetch error:', e); }
+}
+
+function addGpsPoint(p, pan) {
+    const ll = [p.lat, p.lng];
+    const color = statusColor[p.status] || statusColor.AMAN;
+    const marker = L.circleMarker(ll, { radius: 6, color, fillColor: color, fillOpacity: 0.8, weight: 1 })
+        .bindPopup(`<b>${p.status || 'AMAN'}</b><br>Speed: ${p.speed} km/h<br>Alt: ${p.altitude} m<br>Sat: ${p.satellites}<br>${new Date(p.time).toLocaleString()}`)
+        .addTo(gpsMap);
+    gpsMarkers.push(marker);
+    gpsTrail.addLatLng(ll);
+    if (pan) gpsMap.panTo(ll);
+}
+
 // --- Init ---
 fetchData();
 setInterval(fetchData, 30000); // Poll less frequently, MQTT handles live updates
@@ -190,11 +232,16 @@ setInterval(fetchData, 30000); // Poll less frequently, MQTT handles live update
 const mqttClient = mqtt.connect('ws://43.159.61.247:9001');
 mqttClient.on('connect', () => {
     mqttClient.subscribe('brake/temperature');
+    mqttClient.subscribe('brake/gps');
     console.log('🟢 MQTT connected');
 });
 mqttClient.on('message', (topic, message) => {
     try {
         const payload = JSON.parse(message.toString());
+        if (topic === 'brake/gps') {
+            if (gpsMap) addGpsPoint(payload, true);
+            return;
+        }
         const deviceId = topic.split('/').pop();
         updateGauge({
             device_id: deviceId,

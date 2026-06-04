@@ -8,6 +8,8 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
         tailwind.config = {
             theme: { extend: { colors: { slate: { 950: '#020617' } } } }
@@ -35,6 +37,7 @@
     <div class="flex w-fit gap-1 rounded-xl border border-slate-700 bg-slate-900 p-1">
         <button onclick="switchTab('gauge')" id="tab-gauge" class="rounded-lg px-5 py-2 text-sm font-medium bg-slate-700 text-white">Live Monitor</button>
         <button onclick="switchTab('chart')" id="tab-chart" class="rounded-lg px-5 py-2 text-sm font-medium text-slate-400 hover:text-slate-200">Historical Trends</button>
+        <button onclick="switchTab('map')" id="tab-map" class="rounded-lg px-5 py-2 text-sm font-medium text-slate-400 hover:text-slate-200">Map</button>
     </div>
 
     <!-- Panel -->
@@ -64,6 +67,10 @@
             <div style="position:relative;height:300px;">
                 <canvas id="history-chart"></canvas>
             </div>
+        </div>
+        <!-- Map -->
+        <div id="panel-map" class="hidden" style="height:400px;">
+            <div id="map" style="height:100%;width:100%;border-radius:0.75rem;"></div>
         </div>
     </div>
 

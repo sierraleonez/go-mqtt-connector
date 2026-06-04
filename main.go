@@ -29,15 +29,18 @@ var templates embed.FS
 var static embed.FS
 
 var (
-	MQTT_BROKER    string
-	MQTT_TOPIC     string
-	MQTT_CLIENT_ID string
-	INFLUX_URL     string
-	INFLUX_TOKEN   string
-	INFLUX_ORG     string
-	INFLUX_BUCKET  string
-	HTTP_PORT      string
+	MQTT_BROKER        string
+	MQTT_TOPIC         string
+	MQTT_GPS_TOPIC     string
+	MQTT_CLIENT_ID     string
+	INFLUX_URL         string
+	INFLUX_TOKEN       string
+	INFLUX_ORG         string
+	INFLUX_BUCKET      string
+	INFLUX_GPS_BUCKET  string
+	HTTP_PORT          string
 	TELEGRAM_BOT_TOKEN string
+	TELEGRAM_ENABLED   bool
 )
 
 type SensorPayload struct {
@@ -73,6 +76,17 @@ type LogEntry struct {
 	Unit     string   `json:"unit"`
 }
 
+type PositionLogEntry struct {
+	Latitude   float64 `json:"lat"`
+	Longitude  float64 `json:"lng"`
+	Speed      float64 `json:"speed"`
+	Altitude   float64 `json:"altitude"`
+	Time       string  `json:"time"`
+	Satellites int     `json:"satellites"`
+	Suhu       float64 `json:"suhu"`
+	Status     string  `json:"status"`
+}
+
 type DashboardData struct {
 	Current *CurrentState  `json:"current"`
 	History []HistoryPoint `json:"history"`
@@ -98,9 +112,18 @@ func main() {
 		}
 	}()
 
+	gpsWriteAPI := influxClient.WriteAPI(INFLUX_ORG, INFLUX_GPS_BUCKET)
+	go func() {
+		for err := range gpsWriteAPI.Errors() {
+			log.Printf("❌ InfluxDB GPS Write Error: %s\n", err.Error())
+		}
+	}()
+
 	// MQTT setup
 	dataChannel := make(chan SensorData, 1000)
+	gpsChannel := make(chan PositionLogEntry, 1000)
 	go influxWorker(writeAPI, dataChannel)
+	go gpsInfluxWorker(gpsWriteAPI, gpsChannel)
 
 	var messagePubHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
 		var payload SensorPayload
@@ -113,6 +136,15 @@ func main() {
 		dataChannel <- SensorData{DeviceID: deviceID, Payload: payload, Timestamp: time.Now()}
 	}
 
+	var gpsMessageHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
+		var entry PositionLogEntry
+		if err := json.Unmarshal(msg.Payload(), &entry); err != nil {
+			log.Printf("⚠️ Failed to parse GPS JSON: %s\n", string(msg.Payload()))
+			return
+		}
+		gpsChannel <- entry
+	}
+
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(MQTT_BROKER)
 	opts.SetClientID(MQTT_CLIENT_ID + fmt.Sprintf("_%d", time.Now().UnixNano()%10000))
@@ -123,6 +155,10 @@ func main() {
 			log.Fatalf("❌ Subscription error: %s\n", token.Error())
 		}
 		log.Printf("📡 Subscribed to: %s\n", MQTT_TOPIC)
+		if token := client.Subscribe(MQTT_GPS_TOPIC, 0, gpsMessageHandler); token.Wait() && token.Error() != nil {
+			log.Fatalf("❌ GPS Subscription error: %s\n", token.Error())
+		}
+		log.Printf("📡 Subscribed to: %s\n", MQTT_GPS_TOPIC)
 	})
 
 	mqttClient := mqtt.NewClient(opts)
@@ -134,6 +170,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleDashboard)
 	mux.HandleFunc("/api/data", handleAPIData)
+	mux.HandleFunc("/api/gps", handleAPIGps)
 	mux.Handle("/static/", http.FileServer(http.FS(static)))
 
 	server := &http.Server{Addr: HTTP_PORT, Handler: mux}
@@ -145,10 +182,10 @@ func main() {
 	}()
 
 	// Telegram bot
-	if TELEGRAM_BOT_TOKEN != "" {
+	if TELEGRAM_ENABLED && TELEGRAM_BOT_TOKEN != "" {
 		go startTelegramBot(mqttClient)
 	} else {
-		log.Println("⚠️ Telegram bot disabled (no token)")
+		log.Println("⚠️ Telegram bot disabled")
 	}
 
 	// Graceful shutdown
@@ -162,7 +199,9 @@ func main() {
 	server.Shutdown(ctx)
 	mqttClient.Disconnect(250)
 	close(dataChannel)
+	close(gpsChannel)
 	writeAPI.Flush()
+	gpsWriteAPI.Flush()
 	log.Println("👋 Done.")
 }
 
@@ -179,6 +218,29 @@ func influxWorker(writeAPI api.WriteAPI, dataCh chan SensorData) {
 		writeAPI.WritePoint(influxdb2.NewPoint("sensor_logs", tags, fields, data.Timestamp))
 		log.Printf("💾 Device: %s | Suhu: %.2f%s | Status: %s\n",
 			data.DeviceID, data.Payload.Suhu, data.Payload.Unit, data.Payload.Status)
+	}
+}
+
+func gpsInfluxWorker(writeAPI api.WriteAPI, dataCh chan PositionLogEntry) {
+	for entry := range dataCh {
+		ts := time.Now()
+		if entry.Time != "" {
+			if parsed, err := time.Parse(time.RFC3339, entry.Time); err == nil {
+				ts = parsed
+			}
+		}
+		fields := map[string]interface{}{
+			"latitude":   entry.Latitude,
+			"longitude":  entry.Longitude,
+			"speed":      entry.Speed,
+			"altitude":   entry.Altitude,
+			"satellites": entry.Satellites,
+			"suhu":       entry.Suhu,
+			"status":     entry.Status,
+		}
+		writeAPI.WritePoint(influxdb2.NewPoint("gps_logs", nil, fields, ts))
+		log.Printf("📍 GPS | Lat: %.6f | Lng: %.6f | Speed: %.1f\n",
+			entry.Latitude, entry.Longitude, entry.Speed)
 	}
 }
 
@@ -216,6 +278,38 @@ func handleAPIData(w http.ResponseWriter, r *http.Request) {
 	data := queryInfluxData(rangeParam)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
+}
+
+func handleAPIGps(w http.ResponseWriter, r *http.Request) {
+	queryAPI := influxClient.QueryAPI(INFLUX_ORG)
+	flux := fmt.Sprintf(`from(bucket: "%s")
+  |> range(start: -1h)
+  |> filter(fn: (r) => r._field == "latitude" or r._field == "longitude" or r._field == "speed" or r._field == "altitude" or r._field == "satellites" or r._field == "status")
+  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+  |> sort(columns: ["_time"])`, INFLUX_GPS_BUCKET)
+
+	var points []map[string]interface{}
+	if tables, err := queryAPI.Query(context.Background(), flux); err == nil {
+		for tables.Next() {
+			rec := tables.Record()
+			lat, _ := rec.ValueByKey("latitude").(float64)
+			lng, _ := rec.ValueByKey("longitude").(float64)
+			speed, _ := rec.ValueByKey("speed").(float64)
+			alt, _ := rec.ValueByKey("altitude").(float64)
+			sat, _ := rec.ValueByKey("satellites").(int64)
+			status, _ := rec.ValueByKey("status").(string)
+			points = append(points, map[string]interface{}{
+				"lat": lat, "lng": lng, "speed": speed,
+				"altitude": alt, "satellites": sat, "status": status,
+				"time": rec.Time().Format(time.RFC3339),
+			})
+		}
+	}
+	if points == nil {
+		points = []map[string]interface{}{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(points)
 }
 
 func queryInfluxData(timeRange string) DashboardData {
@@ -360,8 +454,12 @@ func queryInfluxDataRange(startStr, endStr string) DashboardData {
 			deviceID, _ := rec.ValueByKey("device_id").(string)
 			unit, _ := rec.ValueByKey("unit").(string)
 			status, _ := rec.ValueByKey("status").(string)
-			if unit == "" { unit = "C" }
-			if status == "" { status = "AMAN" }
+			if unit == "" {
+				unit = "C"
+			}
+			if status == "" {
+				status = "AMAN"
+			}
 			result.Current = &CurrentState{
 				DeviceID: deviceID, Suhu: suhu, Unit: unit, Status: status,
 				Time: rec.Time().Format(time.RFC3339),
@@ -383,7 +481,9 @@ func queryInfluxDataRange(startStr, endStr string) DashboardData {
 			rec := tables.Record()
 			val, ok := rec.Value().(float64)
 			hp := HistoryPoint{Time: rec.Time().Format(time.RFC3339)}
-			if ok { hp.Value = &val }
+			if ok {
+				hp.Value = &val
+			}
 			result.History = append(result.History, hp)
 		}
 	}
@@ -403,11 +503,19 @@ func queryInfluxDataRange(startStr, endStr string) DashboardData {
 			deviceID, _ := rec.ValueByKey("device_id").(string)
 			status, _ := rec.ValueByKey("status").(string)
 			unit, _ := rec.ValueByKey("unit").(string)
-			if unit == "" { unit = "C" }
-			if status == "" { status = "—" }
-			if deviceID == "" { deviceID = "—" }
+			if unit == "" {
+				unit = "C"
+			}
+			if status == "" {
+				status = "—"
+			}
+			if deviceID == "" {
+				deviceID = "—"
+			}
 			entry := LogEntry{Time: rec.Time().Format(time.RFC3339), DeviceID: deviceID, Status: status, Unit: unit}
-			if ok { entry.Suhu = &suhu }
+			if ok {
+				entry.Suhu = &suhu
+			}
 			result.Logs = append(result.Logs, entry)
 		}
 	}
@@ -442,6 +550,7 @@ func startTelegramBot(mqttClient mqtt.Client) {
 Commands:
 /publish — Publish random sensor reading
 /publish <suhu> — Publish specific temperature (e.g. /publish 72.5)
+/gps — Publish random GPS location
 /status — Check service status & latest reading`
 			msg := tgbotapi.NewMessage(chatID, reply)
 			msg.ParseMode = "Markdown"
@@ -500,6 +609,23 @@ Commands:
 			msg.ParseMode = "Markdown"
 			bot.Send(msg)
 
+		case text == "/gps":
+			lat := -6.1 - rand.Float64()*0.2
+			lng := 106.7 + rand.Float64()*0.3
+			speed := rand.Float64() * 80
+			alt := 10 + rand.Float64()*50
+			sat := 4 + rand.Intn(9)
+			statuses := []string{"AMAN", "PERINGATAN", "BAHAYA"}
+			status := statuses[rand.Intn(3)]
+			payload := fmt.Sprintf(`{"lat":%.6f,"lng":%.6f,"speed":%.1f,"altitude":%.1f,"satellites":%d,"status":"%s","time":"%s"}`,
+				lat, lng, speed, alt, sat, status, time.Now().Format(time.RFC3339))
+			token := mqttClient.Publish(MQTT_GPS_TOPIC, 1, false, payload)
+			token.Wait()
+			reply := fmt.Sprintf("📍 *GPS Published!*\n\nLat: %.6f\nLng: %.6f\nSpeed: %.1f km/h\nStatus: %s", lat, lng, speed, status)
+			msg := tgbotapi.NewMessage(chatID, reply)
+			msg.ParseMode = "Markdown"
+			bot.Send(msg)
+
 		default:
 			bot.Send(tgbotapi.NewMessage(chatID, "Unknown command. Use /help"))
 		}
@@ -515,11 +641,14 @@ func loadEnv() {
 	}
 	MQTT_BROKER = env("MQTT_BROKER", "tcp://localhost:1883")
 	MQTT_TOPIC = env("MQTT_TOPIC", "brake/temperature")
+	MQTT_GPS_TOPIC = env("MQTT_GPS_TOPIC", "brake/gps")
 	MQTT_CLIENT_ID = env("MQTT_CLIENT_ID", "go_mqtt_forwarder")
 	INFLUX_URL = env("INFLUX_URL", "http://localhost:8086")
 	INFLUX_TOKEN = env("INFLUX_TOKEN", "")
 	INFLUX_ORG = env("INFLUX_ORG", "")
 	INFLUX_BUCKET = env("INFLUX_BUCKET", "brake-sensor")
+	INFLUX_GPS_BUCKET = env("INFLUX_GPS_BUCKET", "brake-gps")
 	HTTP_PORT = ":" + env("HTTP_PORT", "8080")
 	TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", "")
+	TELEGRAM_ENABLED = env("TELEGRAM_ENABLED", "false") == "true"
 }
