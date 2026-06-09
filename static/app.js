@@ -75,7 +75,10 @@ function updateLogs(logs) {
             <td class="px-4 py-2 font-mono text-slate-300">${row.lng != null ? row.lng.toFixed(6) : '—'}</td>
             <td class="px-4 py-2 text-slate-300">${row.altitude != null ? row.altitude.toFixed(1) : '—'}</td>
             <td class="px-4 py-2 text-slate-300">${row.speed != null ? row.speed.toFixed(1) : '—'}</td>
-            <td class="px-4 py-2 text-slate-300">${row.suhu != null && row.suhu !== 0 ? row.suhu.toFixed(2) : '—'}</td>
+            <td class="px-4 py-2 text-slate-300">${row.suhu != null && row.suhu !== 0 ? (() => {
+                const s = row.suhu; const cls = s > 100 ? 'bg-red-500/20 text-red-400' : s > 80 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400';
+                return `<span class="rounded-full px-2 py-0.5 text-xs font-semibold ${cls}">${s.toFixed(2)}°C</span>`;
+            })() : '—'}</td>
             <td class="px-4 py-2 text-slate-300">${row.satellites != null ? row.satellites : '—'}</td>
             <td class="px-4 py-2"><span class="rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass}">${row.status || '—'}</span></td>
         </tr>`;
@@ -83,8 +86,7 @@ function updateLogs(logs) {
 }
 
 function filteredLogs() {
-    if (!currentStatusFilter) return allLogs;
-    return allLogs.filter(l => l.status === currentStatusFilter);
+    return allLogs.filter(l => l.lat !== 0 && l.lng !== 0 && (!currentStatusFilter || l.status === currentStatusFilter));
 }
 
 function filterStatus(status) {
@@ -166,7 +168,10 @@ function updateChart(history) {
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
+            plugins: { legend: { display: false }, zoom: {
+                    zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' },
+                    pan:  { enabled: true, mode: 'x' },
+                } },
             scales: {
                 x: { type: 'time', time: { unit: timeUnit }, grid: { color: '#1e293b' }, ticks: { color: '#64748b', font: { size: 11 } } },
                 y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b', font: { size: 11 }, callback: v => v + '°' } }
@@ -182,12 +187,35 @@ function changeRange(r) {
     customEnd = '';
     document.getElementById('date-start').value = '';
     document.getElementById('date-end').value = '';
+    const tds = document.getElementById('table-date-start');
+    const tde = document.getElementById('table-date-end');
+    if (tds) tds.value = '';
+    if (tde) tde.value = '';
     document.querySelectorAll('.range-btn').forEach(btn => {
         const active = btn.dataset.range === r;
         btn.className = `range-btn rounded-md px-4 py-1.5 text-sm font-medium ${active ? 'bg-blue-600 text-white' : 'border border-slate-600 text-slate-400 hover:border-slate-400 hover:text-slate-200'}`;
     });
     if (chart) { chart.destroy(); chart = null; }
     fetchHistory();
+    fetchGpsLogs();
+}
+
+function applyTableDateRange() {
+    const start = document.getElementById('table-date-start').value;
+    const end = document.getElementById('table-date-end').value;
+    if (!start || !end) return;
+    if (start > end) { alert('Start date must be before end date'); return; }
+    customStart = start;
+    customEnd = end;
+    currentRange = 'custom';
+    // Sync chart date inputs if present
+    const ds = document.getElementById('date-start');
+    const de = document.getElementById('date-end');
+    if (ds) ds.value = start;
+    if (de) de.value = end;
+    document.querySelectorAll('.range-btn').forEach(btn => {
+        btn.className = `range-btn rounded-md px-${btn.classList.contains('px-3') ? '3' : '4'} py-1 text-xs font-medium border border-slate-600 text-slate-400 hover:border-slate-400 hover:text-slate-200`;
+    });
     fetchGpsLogs();
 }
 
@@ -205,6 +233,43 @@ function applyDateRange() {
     if (chart) { chart.destroy(); chart = null; }
     fetchHistory();
     fetchGpsLogs();
+}
+
+// --- Export PDF ---
+async function exportPDF() {
+    const rangeLabel = customStart && customEnd ? `${customStart} to ${customEnd}` : currentRange;
+    let url = `/api/gps/export?range=${currentRange}`;
+    if (customStart && customEnd) url = `/api/gps/export?start=${customStart}&end=${customEnd}`;
+
+    const res = await fetch(url);
+    const logs = (await res.json()).filter(r => (!currentStatusFilter || r.status === currentStatusFilter) && r.lat !== 0 && r.lng !== 0);
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: 'landscape' });
+    const filterLabel = currentStatusFilter ? `Status: ${currentStatusFilter}` : 'All';
+    doc.setFontSize(13);
+    doc.text('GPS Logs', 14, 14);
+    doc.setFontSize(9);
+    doc.text(`Range: ${rangeLabel}  |  Filter: ${filterLabel}  |  Records: ${logs.length}`, 14, 21);
+
+    doc.autoTable({
+        startY: 26,
+        head: [['Time', 'Latitude', 'Longitude', 'Altitude (m)', 'Speed (km/h)', 'Suhu (°C)', 'Satellites', 'Status']],
+        body: logs.map(r => [
+            new Date(r.time).toLocaleString(),
+            r.lat != null ? r.lat.toFixed(6) : '—',
+            r.lng != null ? r.lng.toFixed(6) : '—',
+            r.altitude != null ? r.altitude.toFixed(1) : '—',
+            r.speed != null ? r.speed.toFixed(1) : '—',
+            r.suhu != null && r.suhu !== 0 ? r.suhu.toFixed(2) : '—',
+            r.satellites != null ? r.satellites : '—',
+            r.status || '—',
+        ]),
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [30, 41, 59] },
+    });
+
+    doc.save(`gps-logs-${rangeLabel}.pdf`);
 }
 
 // --- Tab switching ---
@@ -238,6 +303,16 @@ function applyMapDateRange() {
 // --- Map ---
 const statusColor = { AMAN: '#22c55e', PERINGATAN: '#eab308', BAHAYA: '#ef4444' };
 
+function refreshMap() {
+    if (!gpsMap) return;
+    gpsMarkers.forEach(m => m.remove());
+    gpsMarkers = [];
+    gpsTrail.setLatLngs([]);
+    const start = document.getElementById('map-date-start').value;
+    const end = document.getElementById('map-date-end').value;
+    fetchGpsLogs(start || null, end || null);
+}
+
 function initMap() {
     gpsMap = L.map('map').setView([-6.2, 106.8], 13);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -248,7 +323,7 @@ function initMap() {
 }
 
 function addGpsPoint(p, pan) {
-    if (p.lat == null || p.lng == null) return;
+    if (!p.lat || !p.lng || p.lat === 0 || p.lng === 0) return;
     const ll = [p.lat, p.lng];
     const color = statusColor[p.status] || statusColor.AMAN;
     const marker = L.circleMarker(ll, { radius: 6, color, fillColor: color, fillOpacity: 0.8, weight: 1 })
@@ -283,6 +358,6 @@ mqttClient.on('message', (topic, message) => {
         if (allLogs.length > 100) allLogs.pop();
         updateLogs(filteredLogs());
         // Update map if active
-        if (gpsMap) addGpsPoint(p, true);
+        // (map updates manually via Refresh button)
     } catch (e) { console.error('MQTT parse error:', e); }
 });

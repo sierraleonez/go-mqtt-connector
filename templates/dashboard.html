@@ -7,7 +7,11 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2/hammer.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2/dist/chartjs-plugin-zoom.min.js"></script>
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2/dist/jspdf.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3/dist/jspdf.plugin.autotable.min.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
@@ -105,6 +109,7 @@
                 <span class="text-slate-500 text-sm">to</span>
                 <input type="date" id="date-end" class="rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-sm text-slate-300 focus:border-blue-500 focus:outline-none">
                 <button onclick="applyDateRange()" class="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700">Apply</button>
+                <button onclick="chart && chart.resetZoom()" class="rounded-md bg-slate-700 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-600">↺ Reset Zoom</button>
             </div>
             <div style="position:relative;height:300px;">
                 <canvas id="history-chart"></canvas>
@@ -118,6 +123,7 @@
                 <span class="text-slate-500 text-sm">to</span>
                 <input type="date" id="map-date-end" class="rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-sm text-slate-300 focus:border-blue-500 focus:outline-none">
                 <button onclick="applyMapDateRange()" class="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700">Apply</button>
+                <button onclick="refreshMap()" class="rounded-md bg-slate-700 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-600">↻ Refresh</button>
             </div>
             <div id="map" style="height:390px;width:100%;border-radius:0 0 0.75rem 0.75rem;"></div>
         </div>
@@ -127,12 +133,22 @@
     <div class="rounded-xl border border-slate-700 bg-slate-900 overflow-hidden">
         <div class="px-4 py-3 border-b border-slate-700 flex flex-wrap items-center justify-between gap-2">
             <h2 class="text-sm font-semibold text-slate-300">GPS Logs</h2>
-            <div class="flex gap-1">
-                <button onclick="filterStatus('')" data-status="" class="status-btn rounded-md px-3 py-1 text-xs font-medium bg-slate-700 text-white">All</button>
-                <button onclick="filterStatus('AMAN')" data-status="AMAN" class="status-btn rounded-md px-3 py-1 text-xs font-medium text-green-400 border border-slate-600">AMAN</button>
-                <button onclick="filterStatus('PERINGATAN')" data-status="PERINGATAN" class="status-btn rounded-md px-3 py-1 text-xs font-medium text-yellow-400 border border-slate-600">PERINGATAN</button>
-                <button onclick="filterStatus('BAHAYA')" data-status="BAHAYA" class="status-btn rounded-md px-3 py-1 text-xs font-medium text-red-400 border border-slate-600">BAHAYA</button>
+            <div class="flex gap-1 flex-wrap items-center">
+                <button onclick="changeRange('1h')" data-range="1h" class="range-btn rounded-md px-3 py-1 text-xs font-medium border border-slate-600 text-slate-400 hover:border-slate-400 hover:text-slate-200">1h</button>
+                <button onclick="changeRange('24h')" data-range="24h" class="range-btn rounded-md px-3 py-1 text-xs font-medium bg-blue-600 text-white">24h</button>
+                <button onclick="changeRange('7d')" data-range="7d" class="range-btn rounded-md px-3 py-1 text-xs font-medium border border-slate-600 text-slate-400 hover:border-slate-400 hover:text-slate-200">7d</button>
+                <input type="date" id="table-date-start" class="rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-300 focus:border-blue-500 focus:outline-none">
+                <span class="text-slate-500 text-xs">to</span>
+                <input type="date" id="table-date-end" class="rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-300 focus:border-blue-500 focus:outline-none">
+                <button onclick="applyTableDateRange()" class="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700">Apply</button>
             </div>
+        </div>
+        <div class="px-4 py-2 border-b border-slate-700 flex flex-wrap gap-1">
+            <button onclick="filterStatus('')" data-status="" class="status-btn rounded-md px-3 py-1 text-xs font-medium bg-slate-700 text-white">All</button>
+            <button onclick="filterStatus('AMAN')" data-status="AMAN" class="status-btn rounded-md px-3 py-1 text-xs font-medium text-green-400 border border-slate-600">AMAN</button>
+            <button onclick="filterStatus('PERINGATAN')" data-status="PERINGATAN" class="status-btn rounded-md px-3 py-1 text-xs font-medium text-yellow-400 border border-slate-600">PERINGATAN</button>
+            <button onclick="filterStatus('BAHAYA')" data-status="BAHAYA" class="status-btn rounded-md px-3 py-1 text-xs font-medium text-red-400 border border-slate-600">BAHAYA</button>
+            <button onclick="exportPDF()" class="ml-auto rounded-md bg-slate-700 px-3 py-1 text-xs font-medium text-white hover:bg-slate-600">⬇ Export PDF</button>
         </div>
         <div class="overflow-x-auto">
             <table class="w-full text-sm">

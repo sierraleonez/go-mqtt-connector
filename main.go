@@ -102,6 +102,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleDashboard)
 	mux.HandleFunc("/api/gps", handleAPIGps)
+	mux.HandleFunc("/api/gps/export", handleAPIGpsExport)
 	mux.HandleFunc("/api/gps/history", handleAPIGpsHistory)
 	mux.Handle("/static/", http.FileServer(http.FS(static)))
 
@@ -173,6 +174,14 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAPIGps(w http.ResponseWriter, r *http.Request) {
+	queryGps(w, r, 100)
+}
+
+func handleAPIGpsExport(w http.ResponseWriter, r *http.Request) {
+	queryGps(w, r, 0) // 0 = no limit
+}
+
+func queryGps(w http.ResponseWriter, r *http.Request, limit int) {
 	start := r.URL.Query().Get("start")
 	end := r.URL.Query().Get("end")
 	rangeParam := r.URL.Query().Get("range")
@@ -198,12 +207,18 @@ func handleAPIGps(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	limitClause := ""
+	if limit > 0 {
+		limitClause = fmt.Sprintf("\n  |> limit(n: %d)", limit)
+	}
+
 	queryAPI := influxClient.QueryAPI(INFLUX_ORG)
 	flux := fmt.Sprintf(`from(bucket: "%s")
   |> %s
   |> filter(fn: (r) => r._field == "latitude" or r._field == "longitude" or r._field == "speed" or r._field == "altitude" or r._field == "satellites" or r._field == "status" or r._field == "suhu")
   |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
-  |> sort(columns: ["_time"])`, INFLUX_BUCKET, rangeClause)
+  |> filter(fn: (r) => r.latitude != 0.0 and r.longitude != 0.0)
+  |> sort(columns: ["_time"], desc: true)%s`, INFLUX_BUCKET, rangeClause, limitClause)
 
 	var points []map[string]interface{}
 	if tables, err := queryAPI.Query(context.Background(), flux); err == nil {
