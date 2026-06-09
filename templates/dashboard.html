@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Brake Temperature Dashboard</title>
+    <title>Brake GPS Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
@@ -17,7 +17,7 @@
     </script>
 </head>
 <body class="min-h-screen bg-slate-950 p-4 md:p-8">
-<div class="mx-auto max-w-3xl flex flex-col gap-4" id="app">
+<div class="mx-auto max-w-4xl flex flex-col gap-4" id="app">
 
     <!-- Header -->
     <div class="rounded-xl border border-slate-700 bg-slate-900 p-4">
@@ -27,7 +27,7 @@
                     <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75"></span>
                     <span class="relative inline-flex h-3 w-3 rounded-full bg-green-500"></span>
                 </span>
-                <span class="font-mono text-sm text-slate-300" id="device-id">—</span>
+                <span class="font-mono text-sm text-slate-300" id="device-info">brake/gps</span>
             </div>
             <span id="status-badge" class="rounded-full px-4 py-1 text-sm font-bold tracking-wide bg-green-500 text-white">AMAN</span>
         </div>
@@ -35,23 +35,65 @@
 
     <!-- Tab switcher -->
     <div class="flex w-fit gap-1 rounded-xl border border-slate-700 bg-slate-900 p-1">
-        <button onclick="switchTab('gauge')" id="tab-gauge" class="rounded-lg px-5 py-2 text-sm font-medium bg-slate-700 text-white">Live Monitor</button>
+        <button onclick="switchTab('live')" id="tab-live" class="rounded-lg px-5 py-2 text-sm font-medium bg-slate-700 text-white">Live Monitor</button>
         <button onclick="switchTab('chart')" id="tab-chart" class="rounded-lg px-5 py-2 text-sm font-medium text-slate-400 hover:text-slate-200">Historical Trends</button>
         <button onclick="switchTab('map')" id="tab-map" class="rounded-lg px-5 py-2 text-sm font-medium text-slate-400 hover:text-slate-200">Map</button>
     </div>
 
     <!-- Panel -->
     <div class="rounded-xl border border-slate-700 bg-slate-900">
-        <!-- Gauge -->
-        <div id="panel-gauge" class="flex flex-col items-center gap-3 py-8">
-            <svg width="240" height="130" viewBox="0 0 240 130" aria-label="Temperature gauge">
-                <path id="gauge-bg" d="M 30,120 A 90,90 0 0 1 210,120" fill="none" stroke="#1e293b" stroke-width="18" stroke-linecap="round"/>
-                <path id="gauge-fill" d="M 30,120 A 90,90 0 0 1 210,120" fill="none" stroke="#22c55e" stroke-width="18" stroke-linecap="round" stroke-dasharray="0 283"/>
-                <text id="gauge-value" x="120" y="112" text-anchor="middle" fill="white" font-size="30" font-weight="bold">—</text>
-                <text id="gauge-unit" x="120" y="130" text-anchor="middle" fill="#94a3b8" font-size="15">°C</text>
-            </svg>
-            <p class="text-sm text-slate-400" id="last-updated">Waiting for sensor data…</p>
+        <!-- Live: Speed + Suhu Gauges + telemetry cards -->
+        <div id="panel-live" class="flex flex-col items-center gap-6 py-8 px-4">
+            <!-- Gauges row -->
+            <div class="flex flex-wrap justify-center gap-8">
+                <!-- Speed Gauge -->
+                <div class="flex flex-col items-center gap-2">
+                    <p class="text-xs text-slate-500 uppercase tracking-widest">Speed</p>
+                    <svg width="220" height="120" viewBox="0 0 220 120" aria-label="Speed gauge">
+                        <path d="M 20,110 A 90,90 0 0 1 200,110" fill="none" stroke="#1e293b" stroke-width="16" stroke-linecap="round"/>
+                        <path id="speed-fill" d="M 20,110 A 90,90 0 0 1 200,110" fill="none" stroke="#3b82f6" stroke-width="16" stroke-linecap="round" stroke-dasharray="0 283"/>
+                        <text id="speed-value" x="110" y="102" text-anchor="middle" fill="white" font-size="32" font-weight="bold">0</text>
+                        <text x="110" y="118" text-anchor="middle" fill="#94a3b8" font-size="13">km/h</text>
+                        <text x="14" y="112" fill="#475569" font-size="10" text-anchor="middle">0</text>
+                        <text x="206" y="112" fill="#475569" font-size="10" text-anchor="middle">120</text>
+                    </svg>
+                </div>
+                <!-- Suhu Gauge -->
+                <div class="flex flex-col items-center gap-2">
+                    <p class="text-xs text-slate-500 uppercase tracking-widest">Suhu</p>
+                    <svg width="220" height="120" viewBox="0 0 220 120" aria-label="Suhu gauge">
+                        <path d="M 20,110 A 90,90 0 0 1 200,110" fill="none" stroke="#1e293b" stroke-width="16" stroke-linecap="round"/>
+                        <path id="suhu-fill" d="M 20,110 A 90,90 0 0 1 200,110" fill="none" stroke="#22c55e" stroke-width="16" stroke-linecap="round" stroke-dasharray="0 283"/>
+                        <text id="suhu-value" x="110" y="102" text-anchor="middle" fill="white" font-size="32" font-weight="bold">—</text>
+                        <text x="110" y="118" text-anchor="middle" fill="#94a3b8" font-size="13">°C</text>
+                        <text x="14" y="112" fill="#475569" font-size="10" text-anchor="middle">0</text>
+                        <text x="206" y="112" fill="#475569" font-size="10" text-anchor="middle">100</text>
+                    </svg>
+                </div>
+            </div>
+
+            <!-- Telemetry cards -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 w-full">
+                <div class="rounded-lg bg-slate-800 border border-slate-700 p-3 text-center">
+                    <p class="text-xs text-slate-500 uppercase tracking-widest mb-1">Latitude</p>
+                    <p class="font-mono text-slate-200 text-sm" id="card-lat">—</p>
+                </div>
+                <div class="rounded-lg bg-slate-800 border border-slate-700 p-3 text-center">
+                    <p class="text-xs text-slate-500 uppercase tracking-widest mb-1">Longitude</p>
+                    <p class="font-mono text-slate-200 text-sm" id="card-lng">—</p>
+                </div>
+                <div class="rounded-lg bg-slate-800 border border-slate-700 p-3 text-center">
+                    <p class="text-xs text-slate-500 uppercase tracking-widest mb-1">Altitude</p>
+                    <p class="font-mono text-slate-200 text-sm" id="card-alt">—</p>
+                </div>
+                <div class="rounded-lg bg-slate-800 border border-slate-700 p-3 text-center">
+                    <p class="text-xs text-slate-500 uppercase tracking-widest mb-1">Satellites</p>
+                    <p class="font-mono text-slate-200 text-sm" id="card-sat">—</p>
+                </div>
+            </div>
+            <p class="text-xs text-slate-500" id="last-updated">Waiting for GPS data…</p>
         </div>
+
         <!-- Chart -->
         <div id="panel-chart" class="p-4 hidden">
             <div class="mb-4 flex flex-wrap items-center gap-2">
@@ -68,16 +110,23 @@
                 <canvas id="history-chart"></canvas>
             </div>
         </div>
+
         <!-- Map -->
-        <div id="panel-map" class="hidden" style="height:400px;">
-            <div id="map" style="height:100%;width:100%;border-radius:0.75rem;"></div>
+        <div id="panel-map" class="hidden" style="height:450px;">
+            <div class="px-4 pt-3 pb-2 flex flex-wrap items-center gap-2 border-b border-slate-700">
+                <input type="date" id="map-date-start" class="rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-sm text-slate-300 focus:border-blue-500 focus:outline-none">
+                <span class="text-slate-500 text-sm">to</span>
+                <input type="date" id="map-date-end" class="rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-sm text-slate-300 focus:border-blue-500 focus:outline-none">
+                <button onclick="applyMapDateRange()" class="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700">Apply</button>
+            </div>
+            <div id="map" style="height:390px;width:100%;border-radius:0 0 0.75rem 0.75rem;"></div>
         </div>
     </div>
 
     <!-- Data logs table -->
     <div class="rounded-xl border border-slate-700 bg-slate-900 overflow-hidden">
         <div class="px-4 py-3 border-b border-slate-700 flex flex-wrap items-center justify-between gap-2">
-            <h2 class="text-sm font-semibold text-slate-300">Data Logs</h2>
+            <h2 class="text-sm font-semibold text-slate-300">GPS Logs</h2>
             <div class="flex gap-1">
                 <button onclick="filterStatus('')" data-status="" class="status-btn rounded-md px-3 py-1 text-xs font-medium bg-slate-700 text-white">All</button>
                 <button onclick="filterStatus('AMAN')" data-status="AMAN" class="status-btn rounded-md px-3 py-1 text-xs font-medium text-green-400 border border-slate-600">AMAN</button>
@@ -90,8 +139,12 @@
                 <thead>
                     <tr class="border-b border-slate-700 text-left text-xs text-slate-500">
                         <th class="px-4 py-2">Time</th>
-                        <th class="px-4 py-2">Device ID</th>
-                        <th class="px-4 py-2">Suhu</th>
+                        <th class="px-4 py-2">Latitude</th>
+                        <th class="px-4 py-2">Longitude</th>
+                        <th class="px-4 py-2">Altitude (m)</th>
+                        <th class="px-4 py-2">Speed (km/h)</th>
+                        <th class="px-4 py-2">Suhu (°C)</th>
+                        <th class="px-4 py-2">Satellites</th>
                         <th class="px-4 py-2">Status</th>
                     </tr>
                 </thead>
